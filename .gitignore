@@ -7,6 +7,11 @@ coverage/
 .env*.local
 npm-debug.log*
 pnpm-debug.log*
+firebase-debug.log*
+firestore-debug.log*
+storage-debug.log*
+ui-debug.log*
+.firebase/
 .pnpm-store/
 playwright-report/
 test-results/

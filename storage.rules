@@ -1,0 +1,115 @@
+rules_version = '2';
+
+// Deployed 2026-09-12 with `firebase deploy --only storage`.
+//
+// WHAT IT REPLACED (ruleset published 2025-03-13):
+//   match /{allPaths=**} { allow read, write: if true; }
+// The whole bucket was open. Anyone on the internet could LIST `invoices/` and
+// download, overwrite or delete every archived invoice PDF without signing in
+// -- an unauthenticated listing returned 30 invoice objects.
+//
+// The Invoice-Generator repo carries its own storage.rules with that old open
+// rule. Never deploy Storage from there: it would reopen the bucket.
+//
+// WHAT THIS CHANGES: only the two invoice folders. Every other top-level folder
+// (profile_images, clinicalDocuments, CareLibrary, nurse_shifts, ...) keeps the
+// exact public behaviour it has now, because the phone apps and the nurse
+// console upload there and were built against an open bucket. Tightening those
+// is worth doing, but it is a separate change with its own testing.
+//
+// Invoice PDFs become:
+//   - readable by the two invoice-staff accounts, and by the one member an
+//     invoice version has been released to (checked against the Firestore
+//     release document, the same record the portal lists);
+//   - create-only for invoice staff -- an archived PDF can never be
+//     overwritten or deleted from a client, so the file a member opens is the
+//     file whose fingerprint was checked when it was released.
+//
+// Cross-service rules (firestore.get / firestore.exists) need the Storage
+// service agent to hold Firestore read access. The Firebase console offers to
+// grant it the first time a ruleset using them is published.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isInvoiceStaff() {
+      return request.auth != null
+        && request.auth.token.email in [
+          'sandeep@thecarepal.com',
+          'admin@thecarepal.com'
+        ];
+    }
+
+    function releasePath(invoiceId, versionId) {
+      return /databases/(default)/documents/invoiceReleases/$(invoiceId + '__' + versionId);
+    }
+
+    function releasedToCaller(invoiceId, fileName) {
+      let versionId = fileName.split('[.]pdf$')[0];
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string
+        && fileName.matches('^[A-Za-z0-9_-]{3,128}[.]pdf$')
+        && firestore.exists(releasePath(invoiceId, versionId))
+        && firestore.get(releasePath(invoiceId, versionId)).data.memberEmail
+             == request.auth.token.email.lower()
+        && firestore.get(releasePath(invoiceId, versionId)).data.status == 'released';
+    }
+
+    // Private immutable offer/agreement PDFs use the existing staff accounts.
+    function isArchiveKind(kind) {
+      return kind in ['offers', 'agreements'];
+    }
+
+    function isSha256(value) {
+      return value is string && value.matches('^[a-f0-9]{64}$');
+    }
+
+    function validArchivePdf(kind, fileName) {
+      let meta = request.resource.metadata;
+      return isArchiveKind(kind)
+        && fileName.matches('^[a-f0-9]{64}[.]pdf$')
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.size >= 5
+        && request.resource.size <= 20 * 1024 * 1024
+        && meta.keys().hasAll(['archiveId', 'kind', 'pdfSha256', 'snapshotSha256', 'createdByUid'])
+        && meta.keys().hasOnly(['archiveId', 'kind', 'pdfSha256', 'snapshotSha256', 'createdByUid'])
+        && isSha256(meta.archiveId)
+        && fileName == meta.archiveId + '.pdf'
+        && meta.kind == kind
+        && isSha256(meta.pdfSha256)
+        && isSha256(meta.snapshotSha256)
+        && meta.createdByUid == request.auth.uid;
+    }
+
+    match /document-archives/{kind}/{fileName} {
+      allow get: if isInvoiceStaff() && isArchiveKind(kind)
+        && fileName.matches('^[a-f0-9]{64}[.]pdf$');
+      allow list: if false;
+      allow create: if resource == null && isInvoiceStaff() && validArchivePdf(kind, fileName);
+      allow update, delete: if false;
+    }
+
+    // Preserve the existing public behavior outside the protected namespaces.
+    match /{top}/{rest=**} {
+      allow read, write: if top != 'invoices' && top != 'organizations' && top != 'document-archives';
+    }
+
+    match /invoices/{rest=**} {
+      allow read: if isInvoiceStaff();
+    }
+
+    match /invoices/{invoiceId}/versions/{fileName} {
+      allow read: if isInvoiceStaff() || releasedToCaller(invoiceId, fileName);
+      // `resource == null` is what makes this create-ONLY: Storage evaluates an
+      // upload over an existing object as `create` too, so without it staff
+      // could replace an archived PDF after its fingerprint was recorded.
+      allow create: if isInvoiceStaff()
+        && resource == null
+        && request.resource.contentType == 'application/pdf';
+    }
+
+    // Legacy layout from an early local build of the invoice generator.
+    match /organizations/{rest=**} {
+      allow read: if isInvoiceStaff();
+    }
+  }
+}

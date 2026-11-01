@@ -9,11 +9,17 @@ Create offer letters for **Carepalz Internet Private Limited**, using the same l
 - Calculated monthly and annual compensation totals
 - Configurable training, probation, notice period, company signatory and other employment details
 - Live PDF preview and PDF download
-- Drafts and previous offers stored in the current browser
+- Drafts saved in the current browser
+- Shared previous offers in Firebase, with the exact saved PDF and form snapshot
+- Staff sign-in using the existing approved CarePal accounts
 - Responsive layouts for desktop and mobile
 - Static export ready for GitHub Pages
 
-All offer data and PDF generation stay in the browser. No Firebase configuration, API keys, database or application server are required. Browser storage is specific to the current device and browser; clearing site data removes saved drafts and offers. Download PDFs for a separate permanent copy.
+PDF generation runs in the browser. Unfinished drafts stay in local browser storage. **Save & download PDF** signs staff in, saves the exact PDF to Cloud Storage and its form snapshot to Firestore, verifies the saved bytes, then downloads them. **Previous offers** loads the shared history across devices. Staff can preview/download the original PDF, load its saved fields, or reuse its terms for a new employee. Saved entries are immutable.
+
+The apps use the existing `the-carepal` Firebase project. Only `sandeep@thecarepal.com` and `admin@thecarepal.com` can access shared history, using their existing Firebase Authentication passwords. Public Firebase Web App identifiers are included in the client; no private keys or passwords are bundled. See [Firebase setup and security rules](FIREBASE_SETUP.md).
+
+Clearing browser storage removes the unfinished local draft, while Firebase history remains available. Earlier browser-only offer records are not automatically uploaded because they do not contain the original PDF bytes. Print/open-preview actions remain available for the current generated PDF; use **Save & download PDF** to archive it.
 
 ## Run locally
 

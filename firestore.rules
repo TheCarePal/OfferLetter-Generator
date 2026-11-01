@@ -1,0 +1,329 @@
+rules_version = '2';
+
+// RESTORED from the ruleset published 2026-09-02 01:13, after a deny-all
+// version deployed from this repo on 2026-09-05 cut off live client access to
+// CareVibes and the invoice generator.
+//
+// THE HISTORY MATTERS: that deny-all was written on the belief that nothing used
+// Firestore, because the website does not. The website is not the only client --
+// CareVibes and the invoice generator reach it directly from their own front
+// ends, and a blanket deny is invisible to a grep of this repo. Check the live
+// rules in the console before changing this file, not just the code here.
+//
+// The signup OTP collections (signupOtps, signupOtpThrottle) need NO entry of
+// their own: the catch-all deny at the bottom already closes them to every
+// client, and the Cloud Functions that read and write them use the Admin SDK,
+// which bypasses these rules entirely.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Preserve the existing CareVibes behavior.
+    match /root/theCarePal/careVerse/careVibes/posts/{postId} {
+      allow read, write: if request.auth != null;
+
+      match /userInteractions/comments/allComments/{commentId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+
+    // Invoice-generator access, allowlisted by EMAIL rather than by Firebase
+    // Authentication uid.
+    //
+    // WHY THIS CHANGED (2026-09-10): the list used to name two uids. A uid is
+    // minted per Auth ACCOUNT, not per person -- deleting admin@thecarepal.com
+    // and recreating it with the same address produced a new uid, the old one
+    // ('XACOQ33m5aSwmnlSLl4CdqPKYJ52') stopped matching any account that
+    // exists, and the invoice generator answered every sign-in with "This
+    // account is not configured for CarePal invoice history". Sign-in itself
+    // was never the problem; the rule below it was.
+    //
+    // An email survives that. Firebase Auth enforces one account per address,
+    // so an allowlisted address cannot be claimed by anyone else while the
+    // account exists, and a recreated account arrives carrying the same email.
+    //
+    // Deliberately NOT gated on request.auth.token.email_verified: accounts
+    // created by hand in the Firebase console start unverified, so requiring it
+    // would reproduce the exact lockout this change repairs. Add it once both
+    // accounts are confirmed verified -- worth doing, but not blind.
+    function isInvoiceStaff() {
+      return request.auth != null
+        && request.auth.token.email in [
+          'sandeep@thecarepal.com',
+          'admin@thecarepal.com'
+        ];
+    }
+
+    // The doctors and therapists members can book and pay for online
+    // (/app/doctor, /app/therapy), kept by the office in the CRM's Doctors &
+    // Therapists list. Here, not in the Realtime Database, because the payment
+    // function prices each booking from `fee` -- and the RTDB is writable by
+    // anyone. Members read; invoice staff add and edit; nothing is deleted
+    // (`active: false` hides one). Added 2026-10-13.
+    match /careProviders/{providerId} {
+      function validProvider() {
+        let d = request.resource.data;
+        return d.keys().hasAll(['name', 'kind', 'speciality', 'mode', 'fee', 'active'])
+          && d.keys().hasOnly(['name', 'kind', 'speciality', 'mode', 'fee', 'experience', 'bio',
+                               'active', 'createdAt', 'updatedAt', 'updatedByEmail'])
+          && d.name is string && d.name.size() > 0 && d.name.size() <= 80
+          && d.kind in ['doctor', 'therapist']
+          && d.speciality is string && d.speciality.size() > 0 && d.speciality.size() <= 60
+          && d.mode in ['Online', 'Offline']
+          && d.fee is int && d.fee >= 1 && d.fee <= 100000
+          && (!('experience' in d) || (d.experience is string && d.experience.size() <= 20))
+          && (!('bio' in d) || (d.bio is string && d.bio.size() <= 1000))
+          && d.active is bool;
+      }
+      allow get, list: if request.auth != null;
+      allow create, update: if isInvoiceStaff() && validProvider();
+      allow delete: if false;
+    }
+
+    // Document generators share the existing staff-email allowlist. Keep the
+    // entire new namespace out of the legacy recursive organization grant.
+    function isArchiveKind(kind) {
+      return kind in ['offers', 'agreements'];
+    }
+
+    function isSha256(value) {
+      return value is string && value.matches('^[a-f0-9]{64}$');
+    }
+
+    function validArchive(kind, archiveId) {
+      let entry = request.resource.data;
+      let fields = [
+        'id', 'kind', 'schemaVersion', 'data', 'filename', 'subjectName',
+        'documentDate', 'savedAt', 'createdByUid', 'createdByName',
+        'snapshotSha256', 'pdfSha256', 'pdfSizeBytes', 'pdfStoragePath'
+      ];
+      return isArchiveKind(kind)
+        && isSha256(archiveId)
+        && entry.keys().hasAll(fields)
+        && entry.keys().hasOnly(fields)
+        && entry.id == archiveId
+        && entry.kind == kind
+        && entry.schemaVersion == 1
+        && entry.data is map
+        && entry.filename is string
+        && entry.filename.size() > 4 && entry.filename.size() <= 240
+        && entry.filename.matches('^[^/\\\\\x00-\x1f]+[.]pdf$')
+        && entry.subjectName is string
+        && entry.subjectName.size() > 0 && entry.subjectName.size() <= 180
+        && entry.documentDate is string
+        && entry.documentDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && entry.savedAt == request.time
+        && entry.createdByUid == request.auth.uid
+        && entry.createdByName is string
+        && entry.createdByName.size() > 0 && entry.createdByName.size() <= 160
+        && isSha256(entry.snapshotSha256)
+        && isSha256(entry.pdfSha256)
+        && entry.pdfSizeBytes is int
+        && entry.pdfSizeBytes >= 5 && entry.pdfSizeBytes <= 20 * 1024 * 1024
+        && entry.pdfStoragePath == 'document-archives/' + kind + '/' + archiveId + '.pdf';
+    }
+
+    match /organizations/carepal/documentArchives/{kind}/records/{archiveId} {
+      allow get, list: if isInvoiceStaff() && isArchiveKind(kind);
+      allow create: if isInvoiceStaff() && validArchive(kind, archiveId);
+      allow update, delete: if false;
+    }
+
+    match /organizations/carepal {
+      allow read, write: if isInvoiceStaff();
+    }
+
+    match /organizations/carepal/{collectionName}/{document=**} {
+      allow read, write: if collectionName != 'documentArchives' && isInvoiceStaff();
+    }
+
+    // Invoices released to members, one document per released invoice VERSION,
+    // written by the CRM (website /x-crm-v1) and read by the member portal
+    // (/app/invoices).
+    //
+    // The guarantees live HERE, not in either front end, because the website's
+    // JavaScript can be edited or skipped by anyone with devtools:
+    //
+    // 1. A member can only ever see documents whose memberEmail equals their own
+    //    VERIFIED sign-in email. The portal's query must filter on memberEmail
+    //    and status, or Firestore rejects the whole query -- a member cannot ask
+    //    for "all releases" and have the rule quietly filter them.
+    //
+    // 2. A release cannot name the wrong person. memberEmail is checked against
+    //    buyer.email inside the saved, immutable invoice version, so the CRM
+    //    cannot release invoice X to anyone but the customer invoice X was
+    //    written for -- whatever a bug or a typo in the CRM sends. The PDF
+    //    fingerprint, storage path and totals are pinned to that same version.
+    //
+    // 3. A release is create-once. Its id is derived from the invoice and
+    //    version, so the same version cannot be released twice, and nothing but
+    //    the withdrawal fields (and paymentStatus, mirrored from the invoice)
+    //    can ever change afterwards. Nothing is deleted:
+    //    a withdrawn release stays as the record that it was sent.
+    //
+    // Email is compared lower-cased on both sides: Firebase Auth addresses and
+    // a hand-typed buyer email can differ only in case and still be one person.
+    match /invoiceReleases/{releaseId} {
+      function releasedToCaller() {
+        return request.auth != null
+          && request.auth.token.email_verified == true
+          && request.auth.token.email is string
+          && resource.data.memberEmail == request.auth.token.email.lower()
+          && resource.data.status == 'released';
+      }
+
+      // Every release has always carried these.
+      function requiredReleaseFields() {
+        return ['invoiceId', 'versionId', 'memberEmail', 'invoiceNumber',
+                'buyerName', 'invoiceDate', 'total', 'currency',
+                'pdfStoragePath', 'pdfSha256', 'pdfSizeBytes', 'status',
+                'releasedAt', 'releasedByEmail', 'withdrawnAt',
+                'withdrawnByEmail'];
+      }
+
+      // paymentStatus / paymentLink were added 2026-10-03. They are OPTIONAL,
+      // so releases written before then and the CRM build that predates them
+      // stay valid; when present they must match the invoice exactly.
+      function releaseFields() {
+        return requiredReleaseFields().concat(['paymentStatus', 'paymentLink', 'pdfDownloadUrl']);
+      }
+
+      // pdfDownloadUrl was added 2026-10-08, OPTIONAL like the payment fields.
+      // Members could see their invoices but not open them: the Storage rule
+      // that lets them read the PDF has to look the release up in Firestore,
+      // and that cross-service lookup fails until the Storage service agent is
+      // granted access to Firestore in IAM. So the CRM -- staff can read the
+      // PDF -- stores the file's download link on the release, which only the
+      // invoice's buyer can read. The link is pinned to this very invoice
+      // version's PDF in this project's bucket; nothing else can be stored.
+      function isOwnPdfLink(url, invoiceId, versionId) {
+        return url is string
+          && url.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/the-carepal[.]firebasestorage[.]app/o/invoices%2F'
+               + invoiceId + '%2Fversions%2F' + versionId + '[.]pdf[?]alt=media&token=[0-9a-f-]{36}$');
+      }
+
+      function pdfLinkOk(d, invoiceId, versionId) {
+        return !('pdfDownloadUrl' in d) || isOwnPdfLink(d.pdfDownloadUrl, invoiceId, versionId);
+      }
+
+      // Adding the link to a release made before 2026-10-08. Nothing else moves.
+      function isValidPdfLinkFill() {
+        let d = request.resource.data;
+        return d.diff(resource.data).affectedKeys().hasOnly(['pdfDownloadUrl'])
+          && isOwnPdfLink(d.pdfDownloadUrl, resource.data.invoiceId, resource.data.versionId);
+      }
+
+      // The invoice's stored status as the CRM shows it (normalizePaymentStatus
+      // in invoiceEditing.js): older wordings map onto the three statuses, and
+      // a missing or unknown value reads as raised.
+      function paymentStatusOf(invoice) {
+        let raw = invoice.get('status', 'raised');
+        let mapped = raw is string
+          ? {'issued': 'raised', 'void': 'clear', 'superseded': 'partially-clear', 'suspended': 'partially-clear'}.get(raw, raw)
+          : 'raised';
+        return mapped in ['raised', 'clear', 'partially-clear'] ? mapped : 'raised';
+      }
+
+      function paymentFieldsMatch(d, invoice, version) {
+        return (!('paymentStatus' in d) || d.paymentStatus == paymentStatusOf(invoice))
+          && (!('paymentLink' in d) || d.paymentLink == version.invoiceData.get('stripePayOnlineUrl', ''));
+      }
+
+      function isValidNewRelease() {
+        let d = request.resource.data;
+        let version = get(/databases/$(database)/documents/organizations/carepal/invoices/$(d.invoiceId)/versions/$(d.versionId)).data;
+        let invoice = get(/databases/$(database)/documents/organizations/carepal/invoices/$(d.invoiceId)).data;
+        let buyerEmail = version.invoiceData.buyer.get('email', '');
+        return d.keys().hasOnly(releaseFields())
+          && d.keys().hasAll(requiredReleaseFields())
+          && d.invoiceId is string
+          && d.invoiceId.matches('^[A-Za-z0-9_-]{3,128}$')
+          && d.versionId is string
+          && d.versionId.matches('^[A-Za-z0-9_-]{3,128}$')
+          && releaseId == d.invoiceId + '__' + d.versionId
+          && buyerEmail is string
+          && d.memberEmail is string
+          && d.memberEmail.matches('^[^@\\s]+@[^@\\s]+[.][^@\\s]+$')
+          && d.memberEmail == buyerEmail.trim().lower()
+          && d.invoiceNumber == version.invoiceNumber
+          && d.buyerName == version.buyerName
+          && d.invoiceDate == version.invoiceDate
+          && d.total == version.total
+          && d.currency == 'INR'
+          && d.pdfStoragePath == version.pdfStoragePath
+          && d.pdfSha256 == version.pdfSha256
+          && d.pdfSizeBytes == version.pdfSizeBytes
+          && paymentFieldsMatch(d, invoice, version)
+          && pdfLinkOk(d, d.invoiceId, d.versionId)
+          && d.status == 'released'
+          && d.releasedAt == request.time
+          && d.releasedByEmail == request.auth.token.email
+          && d.withdrawnAt == null
+          && d.withdrawnByEmail == null;
+      }
+
+      // After creation only the status can move, and only between released and
+      // withdrawn. Who it is addressed to, which PDF, and every amount stay
+      // exactly as they were verified at creation.
+      function isValidWithdrawal() {
+        let d = request.resource.data;
+        return resource.data.status == 'released'
+          && d.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'withdrawnAt', 'withdrawnByEmail'])
+          && d.status == 'withdrawn'
+          && d.withdrawnAt == request.time
+          && d.withdrawnByEmail == request.auth.token.email;
+      }
+
+      // Marking an invoice paid/unpaid in the CRM copies the new status onto its
+      // live release in the same transaction, so the invoice must already say
+      // the same thing once that transaction lands.
+      function isValidPaymentStatusSync() {
+        let d = request.resource.data;
+        let invoice = getAfter(/databases/$(database)/documents/organizations/carepal/invoices/$(resource.data.invoiceId)).data;
+        return d.diff(resource.data).affectedKeys().hasOnly(['paymentStatus'])
+          && d.paymentStatus in ['raised', 'clear', 'partially-clear']
+          && invoice.get('status', '') == d.paymentStatus;
+      }
+
+      // Undoing a withdrawal. The recipient is re-checked against the invoice
+      // version rather than trusted from the old document.
+      function isValidRerelease() {
+        let d = request.resource.data;
+        let version = get(/databases/$(database)/documents/organizations/carepal/invoices/$(resource.data.invoiceId)/versions/$(resource.data.versionId)).data;
+        let invoice = get(/databases/$(database)/documents/organizations/carepal/invoices/$(resource.data.invoiceId)).data;
+        return resource.data.status == 'withdrawn'
+          && d.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'releasedAt', 'releasedByEmail', 'withdrawnAt', 'withdrawnByEmail', 'paymentStatus', 'paymentLink', 'pdfDownloadUrl'])
+          && d.status == 'released'
+          && d.releasedAt == request.time
+          && d.releasedByEmail == request.auth.token.email
+          && d.withdrawnAt == null
+          && d.withdrawnByEmail == null
+          && d.memberEmail == version.invoiceData.buyer.get('email', '').trim().lower()
+          && paymentFieldsMatch(d, invoice, version)
+          && pdfLinkOk(d, resource.data.invoiceId, resource.data.versionId)
+          && d.pdfSha256 == version.pdfSha256;
+      }
+
+      // The developer's read-only "View as member" (src/portal/viewAs.js,
+      // DEVELOPER_EMAILS) shows a member's Invoices page as they see it, so it
+      // reads released invoices of any member. Read only: every write below
+      // still needs isInvoiceStaff(). Added 2026-10-13 at the owner's request.
+      function developerViewsReleased() {
+        return request.auth != null
+          && request.auth.token.email_verified == true
+          && request.auth.token.email == 'shlokdhanokar663@gmail.com'
+          && resource.data.status == 'released';
+      }
+
+      allow get, list: if isInvoiceStaff() || releasedToCaller() || developerViewsReleased();
+      allow create: if isInvoiceStaff() && isValidNewRelease();
+      allow update: if isInvoiceStaff() && (isValidWithdrawal() || isValidRerelease() || isValidPaymentStatusSync() || isValidPdfLinkFill());
+      allow delete: if false;
+    }
+
+    // Default deny. Anything not matched above is closed, OTP tickets included.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
