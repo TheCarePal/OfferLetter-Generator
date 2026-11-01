@@ -239,7 +239,7 @@ export function createArchiveService(backend: ArchiveBackend) {
       actor: ArchiveActor,
     ): Promise<ArchiveRecord> {
       if (!actor.uid || !actor.displayName.trim())
-        throw new Error("An authenticated CarePal staff account is required.");
+        throw new Error("An authenticated CarePal admin account is required.");
       const prepared = await prepareArchive(input);
       const existing = await backend.getRecord(prepared.kind, prepared.id);
       if (existing) {

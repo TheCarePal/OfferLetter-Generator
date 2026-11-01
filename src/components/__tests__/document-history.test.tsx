@@ -158,7 +158,7 @@ describe("shared document history", () => {
     });
     expect(result).toEqual({ status: "sign-in-required" });
     expect(
-      screen.getByRole("dialog", { name: "CarePal staff sign in" }),
+      screen.getByRole("dialog", { name: "CarePal Admin sign in" }),
     ).toBeTruthy();
     expect(service.archiveDocument).not.toHaveBeenCalled();
     expect(service.getArchivedPdf).not.toHaveBeenCalled();
@@ -273,7 +273,7 @@ describe("shared document history", () => {
       await pendingPdf.promise;
     });
     expect(
-      screen.getByRole("dialog", { name: "CarePal staff sign in" }),
+      screen.getByRole("dialog", { name: "CarePal Admin sign in" }),
     ).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Load saved details" }),
@@ -325,7 +325,7 @@ describe("shared document history", () => {
       }),
     );
     render(<Harness />);
-    fireEvent.click(screen.getByRole("button", { name: "Staff sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Admin sign in" }));
     fireEvent.change(screen.getByLabelText("Email address"), {
       target: { value: "admin@thecarepal.com" },
     });
@@ -341,7 +341,7 @@ describe("shared document history", () => {
       ),
     );
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(screen.getByRole("button", { name: "Staff sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "Admin sign in" }));
     expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe(
       "",
     );

@@ -209,7 +209,7 @@ describe("offer creator shared archive integration", () => {
     expect(mocked.success).not.toHaveBeenCalled();
   });
 
-  it("does not download or claim a save when staff sign-in is required", async () => {
+  it("does not download or claim a save when admin sign-in is required", async () => {
     mocked.archiveDownload.mockResolvedValue({ status: "sign-in-required" });
     render(<OfferCreator />);
     await finishRender();

@@ -137,7 +137,7 @@ function downloadBlob(blob: Blob, filename: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Shared staff sign-in, immutable history browsing and exact archived-PDF retrieval. */
+/** Shared admin sign-in, immutable history browsing and exact archived-PDF retrieval. */
 export function useDocumentHistory({
   kind,
   schema,
@@ -508,7 +508,7 @@ export function useDocumentHistory({
             ) : (
               <LogIn size={15} />
             )}
-            {auth.status === "loading" ? "Connecting…" : "Staff sign in"}
+            {auth.status === "loading" ? "Connecting…" : "Admin sign in"}
           </button>
           {auth.status === "unauthorized" && (
             <button
@@ -548,7 +548,7 @@ export function useDocumentHistory({
       <div className="modal-header">
         <h2 id={dialogTitleId}>
           {dialog === "sign-in"
-            ? "CarePal staff sign in"
+            ? "CarePal Admin sign in"
             : preview
               ? preview.record.subjectName
               : `Previous ${plural}`}
@@ -671,7 +671,7 @@ export function useDocumentHistory({
             </div>
           </form>
           <p className="document-access-note">
-            Access is limited to approved CarePal staff accounts. Your current
+            Access is limited to approved CarePal admin accounts. Your current
             draft stays in this browser.
           </p>
         </>
@@ -680,7 +680,7 @@ export function useDocumentHistory({
           <p id={dialogDescriptionId} className="modal-description">
             {preview
               ? `This is the exact PDF stored in shared history, verified before opening. Saved ${displayDate(preview.record.savedAt, true)} by ${preview.record.createdByName}.`
-              : `Browse ${plural} saved by CarePal staff. Saved PDFs remain unchanged when their details are reused.`}
+              : `Browse ${plural} saved by CarePal admins. Saved PDFs remain unchanged when their details are reused.`}
           </p>
           {preview ? (
             <>

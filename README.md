@@ -11,7 +11,7 @@ Create offer letters for **Carepalz Internet Private Limited**, using the same l
 - Live PDF preview and PDF download
 - Drafts saved in the current browser
 - Shared previous offers in Firebase, with the exact saved PDF and form snapshot
-- Staff sign-in using the existing approved CarePal accounts
+- Admin sign-in using the existing approved CarePal accounts
 - Responsive layouts for desktop and mobile
 - Static export ready for GitHub Pages
 
